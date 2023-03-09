@@ -21,7 +21,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt;
-use core::hash::{BuildHasher, Hash};
+use core::hash::{BuildHasher, Hash, Hasher};
 use core::ops::{BitAnd, BitOr, BitXor, Index, RangeBounds, Sub};
 
 use super::{Entries, Equivalent, IndexMap};
@@ -1010,5 +1010,55 @@ where
     /// Values are collected in the same order that they appear in `self`.
     fn sub(self, other: &IndexSet<T, S2>) -> Self::Output {
         self.difference(other).cloned().collect()
+    }
+}
+
+impl<T, S> Hash for IndexSet<T, S>
+where
+    T: Eq + Hash,
+    S: BuildHasher,
+    S::Hasher: Clone,
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let hasher = self.map.hasher().build_hasher();
+
+        let mut final_value: u64 = 0;
+        for value in self {
+            // one can not hash all values with a single hasher, because
+            // hasher.hash(a); hasher.hash(b);
+            // and
+            // hasher.hash(b); hasher.hash(a);
+            //
+            // may produce different hash values.
+            //
+            // See https://github.com/bluss/indexmap/issues/67
+
+            // It is not even guranteed that ...
+            //
+            // ```
+            // let mut hasher_1 = self.map.hasher().build_hasher();
+            // let mut hasher_2 = self.map.hasher().build_hasher();
+            //
+            // some_value.hash(&mut hasher_1);
+            // some_value.hash(&mut hasher_2);
+            //
+            // // ... the hashers will produce the same value:
+            // assert_eq!(hasher_1.finish(), hasher_2.finish());
+            // ```
+
+            // The solution is to clone the hasher for each value.
+            // Most hashers seem to implement Clone.
+
+            let mut hasher = hasher.clone();
+
+            value.hash(&mut hasher);
+
+            // according to this pull requests comments https://github.com/rust-lang/rust/pull/48366
+            // this implementation will weaken the quality of the hash.
+            // (might be easier to cause hash collisions)
+            final_value = final_value.wrapping_add(hasher.finish());
+        }
+
+        final_value.hash(state);
     }
 }
